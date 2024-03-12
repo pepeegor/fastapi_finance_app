@@ -1,0 +1,117 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:16
+    container_name: db
+    command: -p 5431
+    volumes:
+      - postgresdata:/var/lib/postgresql/data
+    ports:
+      - 5431:5431
+    env_file: 
+      - app/data/docker.env
+
+  redis: 
+    image: redis:7.2
+    container_name: redis
+    env_file: 
+      - app/data/.env
+    ports:
+      - 6379:6379
+
+  app:
+    build:
+      context: .
+    container_name: app
+    command: sh -c "/wait && /fastapi_app/docker/app.sh"
+    ports: 
+      - 8000:8000
+    env_file: 
+      - app/data/docker.env
+    depends_on:
+      - db
+      - redis
+
+  celery:
+    build:
+      context: .
+    env_file: 
+      - app/data/docker.env
+    container_name: celery
+    command: ["/fastapi_app/docker/celery.sh", "celery"]
+    environment:
+      - CELERY_BROKER=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+    depends_on:
+      - redis
+
+  flower:
+    build:
+      context: .
+    env_file: 
+      - app/data/docker.env
+    container_name: flower
+    command: ["/fastapi_app/docker/celery.sh", "flower"]
+    depends_on:
+      - redis
+      - celery
+    ports:
+      - 5555:5555
+
+  node-exporter:
+    image: quay.io/prometheus/node-exporter:latest
+    container_name: node-exporter
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+      - /:/host:ro,rslave
+    command: 
+      - '--path.rootfs=/host'
+      - '--path.procfs=/host/proc' 
+      - '--path.sysfs=/host/sys'
+      - --collector.filesystem.ignored-mount-points
+      - "^/(sys|proc|dev|host|etc|rootfs/var/lib/docker/containers|rootfs/var/lib/docker/overlay2|rootfs/run/docker/netns|rootfs/var/lib/docker/aufs)($$|/)"
+    ports:
+      - 9100:9100
+    restart: always
+
+  redis_exporter:
+    image: quay.io/oliver006/redis_exporter
+    container_name: redis_exporter
+    env_file: 
+      - app/data/.env
+    ports: 
+      - 9121:9121 
+
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml/:/etc/prometheus/prometheus.yml
+      - prometheusdata:/prometheus
+    # restart: unless-stopped
+    command: 
+      - '--config.file=/etc/prometheus/prometheus.yml' 
+    ports:
+      - 9090:9090
+    depends_on:
+      - app
+
+  grafana:
+    image: grafana/grafana:10.1.2
+    container_name: grafana
+    volumes:
+      - grafanadata:/var/lib/grafana
+    # restart: unless-stopped
+    environment:
+      - GF_INSTALL_PLUGINS=redis-datasource, redis-app
+    ports:
+      - 3000:3000
+    depends_on:
+      - prometheus
+
+volumes:
+  postgresdata:
+  grafanadata:
+  prometheusdata:
